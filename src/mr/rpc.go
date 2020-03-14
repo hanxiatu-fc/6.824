@@ -9,12 +9,15 @@ package mr
 // and reply for an RPC.
 //
 
-type ExampleArgs struct {
-	X int
+const SocketFile = "/tmp/6.824-mr"
+//const SocketFile = "mr-socket"
+
+type Request struct {
+	Task *Task
 }
 
-type ExampleReply struct {
-	Y int
+type Reply struct {
+	Task *Task
 }
 
 // Add your RPC definitions here.

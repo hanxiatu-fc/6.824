@@ -114,6 +114,7 @@ fi
 echo '***' Starting reduce parallelism test.
 
 rm -f mr-out* mr-worker*
+rm -f mr-*
 
 ../mrmaster ../pg*txt &
 sleep 1
@@ -134,6 +135,7 @@ fi
 
 
 # generate the correct output
+rm -f mr-*
 ../mrsequential ../../mrapps/nocrash.so ../pg*txt || exit 1
 sort mr-out-0 > mr-correct-crash.txt
 rm -f mr-out*
@@ -144,24 +146,25 @@ rm -f mr-done
 (../mrmaster ../pg*txt ; touch mr-done ) &
 sleep 1
 
+SorcketFile='/tmp/6.824-mr'
 # start multiple workers
 ../mrworker ../../mrapps/crash.so &
 
-( while [ -e mr-socket -a ! -f mr-done ]
+( while [ -e $SorcketFile -a ! -f mr-done ]
   do
-    ../mrworker ../../mrapps/crash.so 
+    ../mrworker ../../mrapps/crash.so
     sleep 1
   done ) &
 
-( while [ -e mr-socket -a ! -f mr-done ]
+( while [ -e $SorcketFile -a ! -f mr-done ]
   do
-    ../mrworker ../../mrapps/crash.so 
+    ../mrworker ../../mrapps/crash.so
     sleep 1
   done ) &
 
-while [ -e mr-socket -a ! -f mr-done ]
+while [ -e $SorcketFile -a ! -f mr-done ]
 do
-  ../mrworker ../../mrapps/crash.so 
+  ../mrworker ../../mrapps/crash.so
   sleep 1
 done
 
@@ -169,7 +172,7 @@ wait
 wait
 wait
 
-rm mr-socket
+rm $SorcketFile
 sort mr-out* > mr-crash-all
 if cmp mr-crash-all mr-correct-crash.txt
 then
