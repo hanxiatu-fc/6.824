@@ -19,6 +19,7 @@ package raft
 
 import (
 	"fmt"
+	"log"
 	"math/rand"
 	"sync"
 	"time"
@@ -60,7 +61,8 @@ type Raft struct {
 
 	role Role
 	applyCh chan ApplyMsg
-	eventCh chan bool
+	eventCh chan Event
+	timerCh chan bool
 
 
 	// Your data here (2A, 2B, 2C).
@@ -101,6 +103,7 @@ type Event int
 
 const (
 	AppendRCP Event=iota
+	GrantVote
 	TimeOut
 )
 
@@ -356,10 +359,63 @@ func (rf *Raft) leader() {
 
 func (rf *Raft) follower() {
 
+	rf.timer(Follower)
+
+	for {
+		event := <- rf.eventCh
+		switch event {
+			case AppendRCP:
+				rf.timerCh <- true
+			case GrantVote:
+				rf.timerCh <- true
+			case TimeOut:
+				goto timeout
+		}
+	}
+
+timeout :
+	rf.fallInto(Candidate)
 }
 
 func (rf *Raft) candidate() {
+	rf.launchElection()
+	rf.timer(Candidate)
 
+	for {
+		event := <- rf.eventCh
+		switch event {
+			case AppendRCP:
+				rf.timerCh <- true
+			case TimeOut:
+				goto timeout
+		}
+	}
+
+timeout:
+	rf.candidate()
+}
+
+func (rf *Raft) launchElection() {
+
+}
+
+func (rf *Raft) timer(role Role) {
+	go func() {
+		for {
+			to := random(150, 300)
+			select {
+			case <- rf.timerCh:
+				log.Printf("reset timer for %v", role)
+			case <- time.After(time.Duration(to) * time.Microsecond):
+				goto timeout
+			}
+		}
+
+	timeout :
+		if role == rf.role {
+			rf.eventCh <- TimeOut
+		}
+	}()
 }
 
 func random(min, max int) int {
