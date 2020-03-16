@@ -17,7 +17,12 @@ package raft
 //   in the same server.
 //
 
-import "sync"
+import (
+	"fmt"
+	"math/rand"
+	"sync"
+	"time"
+)
 import "sync/atomic"
 import "mit/labrpc"
 
@@ -53,11 +58,51 @@ type Raft struct {
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 
+	role Role
+	applyCh chan ApplyMsg
+	eventCh chan bool
+
+
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	///////////////////// State /////////////////////
+	// Persistent state on all servers
+	// (Updated on stable storage before responding to RPCs)
+	currentTerm int
+	votedFor int // -1 represent nil?
+	logEntries []LogEntry
+
+	// Volatile state on all servers
+	commitIndex int
+	lastApplied int
+
+	// Volatile state on leaders
+	// (Reinitialized after election)
+	nextIndex []int
+	matchIndex []int
+
+	/////////////// AppendEntries RPC ///////////////
+
+	//////////////// RequestVote RPC ////////////////
+
 }
+
+type Role int
+
+const (
+	Leader Role=iota
+	Follower
+	Candidate
+)
+
+type Event int
+
+const (
+	AppendRCP Event=iota
+	TimeOut
+)
 
 // return currentTerm and whether this server
 // believes it is the leader.
@@ -108,8 +153,33 @@ func (rf *Raft) readPersist(data []byte) {
 	// }
 }
 
+type LogEntry struct {
 
+}
 
+type AppendEntriesArgs struct {
+	term int
+	leaderId int
+	preLogIndex int
+	prevLogTerm int
+
+	entries []LogEntry
+	leaderCommit int
+}
+
+type AppendEntriesReply struct {
+	term int
+	success bool
+}
+
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	// Your code here (2A, 2B).
+}
+
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	return ok
+}
 
 //
 // example RequestVote RPC arguments structure.
@@ -117,6 +187,10 @@ func (rf *Raft) readPersist(data []byte) {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	term int
+	candidateId int
+	lastLogIndex int
+	lastLogTerm int
 }
 
 //
@@ -125,6 +199,8 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
+	term int
+	voteGranted bool
 }
 
 //
@@ -197,8 +273,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 // the tester calls Kill() when a Raft instance won't
 // be needed again. for your convenience, we supply
-// code to set rf.dead (without needing a lock),
-// and a killed() method to test rf.dead in
+//// code to set rf.dead (without needing a lock),
+//// and a killed() method to test rf.dead in
 // long-running loops. you can also add your own
 // code to Kill(). you're not required to do anything
 // about this, but it may be convenient (for example)
@@ -231,12 +307,64 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+	rf.applyCh = applyCh
+	rf.role = Follower
 
 	// Your initialization code here (2A, 2B, 2C).
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
+	//rf.currentTerm = gTerm
+	//rf.votedFor = -1
+	//
+	//rf.commitIndex
+
+	go rf.work()
 
 	return rf
 }
+
+func (rf *Raft) isLeader() bool {
+	return rf.role == Leader
+}
+
+func (rf *Raft) work() {
+
+	// First start with Follower
+	rf.fallInto(Follower)
+}
+
+func (rf *Raft) fallInto(role Role) {
+	rf.role = role
+
+	switch  rf.role {
+		case Leader:
+			rf.leader()
+		case Follower:
+			rf.follower()
+		case Candidate:
+			rf.candidate()
+		default:
+			fmt.Printf("Must Not here")
+	}
+}
+
+func (rf *Raft) leader() {
+
+}
+
+func (rf *Raft) follower() {
+
+}
+
+func (rf *Raft) candidate() {
+
+}
+
+func random(min, max int) int {
+	rand.Seed(time.Now().Unix())
+	return rand.Intn(max-min) + min
+}
+
+var gTerm int
