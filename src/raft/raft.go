@@ -160,13 +160,20 @@ type AppendEntriesReply struct {
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	// Your code here (2A, 2B).
 	if args == nil || reply == nil{
-		logE("[AppendEntries][Raft_%d] receive : args %+v, reply %+v!", rf.me, args, reply)
+		logE("[AppendEntries][Raft_%d] receive : args %+v, reply %+v!\n", rf.me, args, reply)
 		return
 	}
 
-	rf.eventCh <- AppendEntriesRPC
+	logD("[AppendEntries][Raft_%d] term(%d) receive RPC from [Raft_%d] term(%d)\n",
+		rf.me, rf.currentTerm, args.LeaderId, args.Term)
+
+	if !rf.isLeader() {
+		rf.eventCh <- AppendEntriesRPC
+	}
 
 	if args.Term > rf.currentTerm {
+		logD("[AppendEntries][Raft_%d] term(%d -> %d) out of date", rf.me, rf.currentTerm, args.Term)
+		rf.eventCh <- TermOverdue
 		rf.currentTerm = args.Term
 	} else if args.Term < rf.currentTerm { // TODO
 		reply.Term = rf.currentTerm
@@ -177,6 +184,16 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+
+	logD("[sendAppendEntries][Raft_%d] term(%d) get reply from [Raft_%d] term(%d)\n",
+		rf.me, rf.currentTerm, server, args.Term)
+
+	// discovers server with higher term
+	if reply.Term > rf.currentTerm {
+		rf.heartBeatCh <- HQuit
+		rf.eventCh <- TermOverdue
+	}
+
 	return ok
 }
 
@@ -217,7 +234,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	votedFor := -1
 
-	if args.Term >=  rf.currentTerm && (rf.votedFor == -1 || rf.votedFor == args.CandidateId) {
+	if rf.isFollower() && args.Term >=  rf.currentTerm && (rf.votedFor == -1 || rf.votedFor == args.CandidateId) {
 		logLen := len(rf.logEntries)
 		if logLen <= 0 || upToDate(args.LastLogIndex, args.LastLogTerm, rf.logEntries[logLen - 1]) {
 			votedFor = args.CandidateId
@@ -225,10 +242,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	if votedFor != -1 {
-		rf.currentTerm = args.Term // TODO
-
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = true
+
+		rf.eventCh <- GrantVote
 
 		logD("[RequestVote] [Raft_%d] vote OK to [Raft_%d]\n", rf.me, args.CandidateId)
 		return
@@ -284,14 +301,14 @@ func upToDate(lastIndex, lastTerm int, log LogEntry) bool {
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 
-	logD("[sendRequestVote] get reply %+v, Got : %d, Needed : %d",
-		reply, rf.voteGot, rf.voteNeeded)
+	logD("[sendRequestVote] [Raft_%d] term(%d) get reply %+v from [Raft_%d], Got : %d, Needed : %d\n",
+		rf.me, rf.currentTerm, reply, server, rf.voteGot, rf.voteNeeded)
 
 	if reply.VoteGranted {
 		rf.voteGot ++
 		if rf.voteGot >= rf.voteNeeded {
-			logD("[sendRequestVote] election success!!! ~~~~~~~~~")
-			rf.eventCh <- ElectionSuccess
+			logD("[sendRequestVote] [Raft_%d] win the election!!! ~~~~~~~~~", rf.me)
+			rf.eventCh <- WinElection
 			//rf.fallInto(Leader)
 		}
 	}
@@ -408,7 +425,7 @@ func (rf *Raft) isCandidate() bool {
 
 func (rf *Raft) fallInto(role Role) {
 	go func() {
-		logD("[fallInto] %v", role)
+		logD("[fallInto] [Raft_%d] -> %v", rf.me, role)
 
 		stateChanged := rf.role != role
 
@@ -430,6 +447,14 @@ func (rf *Raft) fallInto(role Role) {
 
 func (rf *Raft) leader() {
 	rf.heartbeat() // has own routine
+
+	event := <- rf.eventCh
+	logD("[leader] [Raft_%d] receive event(%v)\n", rf.me, event)
+	switch event {
+	case TermOverdue: {
+		rf.fallInto(Follower)
+	}
+	}
 }
 
 func (rf *Raft) follower() {
@@ -438,6 +463,7 @@ func (rf *Raft) follower() {
 
 	for {
 		event := <- rf.eventCh
+		logD("[follower] [Raft_%d] receive event(%v)\n", rf.me, event)
 		switch event {
 		case AppendEntriesRPC: {
 			rf.timerCh <- Reset
@@ -453,7 +479,7 @@ func (rf *Raft) follower() {
 	}
 
 end :
-	logD("[follower] end")
+	logD("[follower] [Raft_%d] timeout~~ \n", rf.me)
 }
 
 func (rf *Raft) candidate(stateChanged bool) {
@@ -465,21 +491,20 @@ func (rf *Raft) candidate(stateChanged bool) {
 	rf.timer(Candidate) // has own routine
 
 	event := <-rf.eventCh
+	logD("[candidate] [Raft_%d] receive event(%v)\n", rf.me, event)
 	switch event {
-		case AppendEntriesRPC: {
-			rf.timerCh <- TQuit
-			rf.fallInto(Follower)
-		}
-		case ElectionSuccess: {
-			logD("[candidate] First quit timer")
-			rf.timerCh <- TQuit
-			logD("[candidate] then for into leader")
-			rf.fallInto(Leader)
-		}
-		case TimeOut: {
-			rf.timerCh <- TQuit
-			rf.fallInto(Candidate)
-		}
+	case WinElection: {
+		rf.timerCh <- TQuit
+		rf.fallInto(Leader)
+	}
+	case TermOverdue: {
+		rf.timerCh <- TQuit
+		rf.fallInto(Follower)
+	}
+	case TimeOut: {
+		rf.timerCh <- TQuit
+		rf.fallInto(Candidate)
+	}
 	}
 }
 
@@ -519,10 +544,11 @@ func (rf *Raft) timer(role Role) {
 	go func() {
 		for {
 			to := random(TimeOutMin, TimeOutMax)
+			logD("[timer] [Raft_%d] start at %v with ~ %d ms ~\n", rf.me, time.Now().UnixNano() / 1e6, to)
 			select {
 			case tch := <- rf.timerCh: {
 				if tch == Reset {
-					logD("[timer] [Raft_%d] reset timer!", rf.me)
+					logD("[timer] [Raft_%d] reset timer!\n", rf.me)
 				} else if tch == TQuit {
 					return
 				}
@@ -544,12 +570,17 @@ func (rf *Raft) heartbeat() {
 	go func() {
 		for {
 			select {
-			case hb := <- rf.heartBeatCh:
+			case hb := <- rf.heartBeatCh: {
 				if hb == HQuit {
+					logD("[heartbeat] [Raft_%d] quit!\n", rf.me)
 					return
 				}
-			case <- time.After(HeartBeatDuration * time.Millisecond):
+			}
+			case <- time.After(HeartBeatDuration * time.Millisecond): {
+				logD("[heartbeat] [Raft_%d] ~~~~~~~~~ at %v\n", rf.me, time.Now().UnixNano() / 1e6)
 				rf.sendMsg(true)
+			}
+
 			}
 		}
 	}()
@@ -591,6 +622,11 @@ func (rf *Raft) sendMsg(heartbeat bool) {
 	for i := 0; i < rf.serverNum; i ++ {
 		if i == rf.me {
 			continue
+		}
+		if heartbeat {
+			logD("[sendMsg] [Raft_%d] send heartbeat RPC to [Raft_%d]", rf.me, i)
+		} else {
+			logD("[sendMsg] [Raft_%d] send normal RPC to [Raft_%d]", rf.me, i)
 		}
 		rf.sendAppendEntries(i, args, reply)
 	}

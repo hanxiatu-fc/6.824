@@ -2,12 +2,14 @@ package raft
 
 import "log"
 
-const TimeOutMin = 1000
-const TimeOutMax = 2000
-const HeartBeatDuration = 500
+const multi = 1
+
+const TimeOutMin = 1000 * multi
+const TimeOutMax = 2000 * multi
+const HeartBeatDuration = 50
 
 // Debugging
-const Debug = 0
+const Debug = 1
 
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
@@ -53,21 +55,24 @@ func (r Role) String() string {
 type Event int
 const (
 	AppendEntriesRPC Event =iota
+	WinElection
+	TermOverdue
 	GrantVote
-	ElectionSuccess
 	TimeOut
 )
 
 func (e Event)String() string {
 	switch e {
-	case AppendEntriesRPC:
+	case AppendEntriesRPC :
 		return "AppendEntriesRPC"
-	case GrantVote:
-		return "GrantVote"
-	case ElectionSuccess:
-		return "ElectionSuccess"
 	case TimeOut:
 		return "TimeOut"
+	case WinElection:
+		return "WinElection"
+	case TermOverdue:
+		return "TermOverdue"
+	case GrantVote:
+		return "GrantVote"
 	default:
 		return "???"
 	}
